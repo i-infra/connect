@@ -16,27 +16,29 @@ Nonolith Connect is licensed under the terms of the [GNU GPLv3+][gpl].
 Dependencies
 ------------
 
-`nonolith-connect` is written in C++ and builds with `scons`. It needs several
-boost libraries: `asio`, `system`, `date_time`, `regex`, `thread`. It also uses 
-[libjson][], [websocketpp][] [(modified branch)][websocketpp-nl], and [libusb][],
-which are included as subdirectories or submodules of this git repository.
-Note that libusb is a [customized version][libusb-nl], newer than the version found in Linux
-distributions. This version contains bugfixes to the async API.
+`nonolith-connect` is written in C++ (C++17) and builds with CMake. It requires:
 
-[libjson]: http://sourceforge.net/projects/libjson/
-[websocketpp]: https://github.com/zaphoyd/websocketpp
-[websocketpp-nl]: https://github.com/nonolith/websocketpp
-[libusb]: http://libusb.sourceforge.net/api-1.0/index.html
-[libusb-nl]: https://github.com/nonolith/libusb
+  * [Boost](https://www.boost.org/) (1.70+) -- `asio`, `beast`, `regex`, `thread`
+  * [libusb](https://libusb.info/) (1.0.16+) -- system install via package manager
+  * [libjson](http://sourceforge.net/projects/libjson/) -- included in-tree
+
+### macOS
+
+    brew install boost libusb cmake pkg-config
+
+### Linux (Debian/Ubuntu)
+
+    sudo apt install cmake pkg-config libboost-regex-dev libboost-thread-dev libusb-1.0-0-dev
 
 Build instructions
 ------------------
 
-    git clone --recursive https://github.com/nonolith/connect.git
+    git clone https://github.com/nonolith/connect.git
     cd connect
-    scons -j5
+    cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-to build the nonolith-connect executable
+The `nonolith-connect` executable will be in `build/`.
 
 Installation notes
 ------------------
