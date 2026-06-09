@@ -15,6 +15,7 @@
 
 #include "dataserver.hpp"
 #include "cee/cee.hpp"
+#include "m1k/m1k.hpp"
 #include "bootloader/bootloader.hpp"
 
 using namespace std;
@@ -26,6 +27,11 @@ boost::thread* usb_thread;
 #define NONOLITH_VID 0x59e3
 #define CEE_PID 0xCEE1
 #define BOOTLOADER_PID 0xBBBB
+
+#define ADI_VID 0x0456
+#define M1K_PID 0xCEE2
+#define ADI_VID2 0x064B
+#define M1K_PID2 0x784C
 
 static libusb_hotplug_callback_handle hotplug_handle;
 
@@ -92,6 +98,9 @@ void deviceAdded(libusb_device *dev){
 			}else if (desc.idProduct == BOOTLOADER_PID || desc.idProduct == 0xb003){
 				newDevice = device_ptr(new Bootloader_device(dev, desc));
 			}
+		}else if ((desc.idVendor == ADI_VID && desc.idProduct == M1K_PID) ||
+		          (desc.idVendor == ADI_VID2 && desc.idProduct == M1K_PID2)){
+			newDevice = device_ptr(new M1K_device(dev, desc));
 		}
 	}catch(std::exception e){
 		cerr << "Error initializing new device. Ignoring." << std::endl;

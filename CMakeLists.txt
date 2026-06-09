@@ -51,6 +51,7 @@ set(SOURCES
     streaming_device/streaming_device.cpp
     streaming_device/ws_api.cpp
     cee/cee.cpp
+    m1k/m1k.cpp
     bootloader/bootloader.cpp
 )
 
