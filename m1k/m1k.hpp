@@ -45,6 +45,18 @@ struct M1K_EEPROM_cal {
 #define M1K_I_MIN            -200.0   // mA
 #define M1K_I_MAX            200.0    // mA
 
+// GPIO pin definitions (PIOB offset = 0x20)
+#define M1K_CHA_50R_2V5     (0x20 + 0)   // PB0
+#define M1K_CHA_50R_GND     (0x20 + 1)   // PB1
+#define M1K_CHA_FEEDBACK    (0x20 + 2)   // PB2
+#define M1K_CHA_OUTPUT_EN   (0x20 + 3)   // PB3
+#define M1K_CHB_50R_2V5     (0x20 + 5)   // PB5
+#define M1K_CHB_50R_GND     (0x20 + 6)   // PB6
+#define M1K_CHB_FEEDBACK    (0x20 + 7)   // PB7
+#define M1K_CHB_OUTPUT_EN   (0x20 + 8)   // PB8
+#define M1K_CHA_SPLIT       34            // PA2
+#define M1K_CHB_SPLIT       39            // PA7
+
 enum M1K_mode {
 	M1K_HI_Z = 0,
 	M1K_SVMI = 1,
@@ -52,6 +64,17 @@ enum M1K_mode {
 	M1K_HI_Z_SPLIT = 3,
 	M1K_SVMI_SPLIT = 4,
 	M1K_SIMV_SPLIT = 5,
+};
+
+// Per-channel analog front-end state (tracked locally)
+struct M1K_frontend {
+	bool r50_2v5;
+	bool r50_gnd;
+	bool feedback;
+	bool output_en;
+	bool split;
+	uint8_t pot_r1;
+	uint8_t pot_r2;
 };
 
 class M1K_device: public StreamingDevice, USB_device {
@@ -104,8 +127,35 @@ protected:
 
 	void readCalibration();
 
+	// GPIO helpers
+	void setGPIO(unsigned pin, bool high);
+	void setDigipot(unsigned channel, uint8_t r1, uint8_t r2);
+
+	// Frontend state query/modify
+	JSONNode frontendToJSON();
+	JSONNode frontendChannelToJSON(unsigned ch);
+	void setFrontendSwitch(unsigned ch, const string& name, bool val);
+
+	// ADM1177 power monitoring
+	JSONNode readPower();
+
+	// Temperature
+	JSONNode readTemperature();
+
+	// LED state
+	JSONNode ledToJSON();
+	void setLEDs(uint8_t state);
+
 	M1K_EEPROM_cal cal;
 	unsigned m_mode[2];
 	int m1k_per;
 	uint16_t sof_start;
+	uint8_t ledState;
+	M1K_frontend frontend[2]; // [0]=A, [1]=B
+
+	// REST callbacks
+	void handleRESTFrontendCallback(session_ptr client, string postdata);
+	void handleRESTLEDCallback(session_ptr client, string postdata);
+	void handleRESTCalibrationCallback(session_ptr client, string postdata);
+	void handleRESTSerialCallback(session_ptr client, string postdata);
 };

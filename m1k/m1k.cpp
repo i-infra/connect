@@ -54,6 +54,18 @@ M1K_device::M1K_device(libusb_device *dev, libusb_device_descriptor &desc):
 	m_mode[0] = M1K_HI_Z;
 	m_mode[1] = M1K_HI_Z;
 	sof_start = 0;
+	ledState = 0;
+
+	// Init frontend state to match firmware defaults
+	for (int ch = 0; ch < 2; ch++) {
+		frontend[ch].r50_2v5 = false;
+		frontend[ch].r50_gnd = false;
+		frontend[ch].feedback = true;  // active LOW, initialized LOW = on
+		frontend[ch].output_en = false;
+		frontend[ch].split = false;
+		frontend[ch].pot_r1 = 0;
+		frontend[ch].pot_r2 = 0;
+	}
 
 	// Read hardware and firmware version strings
 	char buf[64];
@@ -443,6 +455,137 @@ inline void M1K_device::checkOutputEffective(Channel& channel) {
 	}
 }
 
+// --- GPIO helpers ---
+
+void M1K_device::setGPIO(unsigned pin, bool high) {
+	controlTransfer(0x40, high ? 0x51 : 0x50, pin, 0, 0, 0);
+}
+
+void M1K_device::setDigipot(unsigned channel, uint8_t r1, uint8_t r2) {
+	controlTransfer(0x40, 0x59, channel, (r1 << 8) | r2, 0, 0);
+	frontend[channel].pot_r1 = r1;
+	frontend[channel].pot_r2 = r2;
+}
+
+// --- Frontend state ---
+
+JSONNode M1K_device::frontendChannelToJSON(unsigned ch) {
+	JSONNode n(JSON_NODE);
+	n.push_back(JSONNode("r50_2v5", frontend[ch].r50_2v5));
+	n.push_back(JSONNode("r50_gnd", frontend[ch].r50_gnd));
+	n.push_back(JSONNode("feedback", frontend[ch].feedback));
+	n.push_back(JSONNode("output_en", frontend[ch].output_en));
+	n.push_back(JSONNode("split", frontend[ch].split));
+
+	JSONNode pot(JSON_ARRAY);
+	pot.set_name("pot");
+	pot.push_back(JSONNode("", frontend[ch].pot_r1));
+	pot.push_back(JSONNode("", frontend[ch].pot_r2));
+	n.push_back(pot);
+
+	return n;
+}
+
+JSONNode M1K_device::frontendToJSON() {
+	JSONNode n(JSON_NODE);
+	JSONNode a = frontendChannelToJSON(0);
+	a.set_name("a");
+	JSONNode b = frontendChannelToJSON(1);
+	b.set_name("b");
+	n.push_back(a);
+	n.push_back(b);
+	return n;
+}
+
+void M1K_device::setFrontendSwitch(unsigned ch, const string& name, bool val) {
+	// GPIO switches are active LOW: val=true means switch ON = pin LOW
+	unsigned pin;
+	if (name == "r50_2v5") {
+		pin = ch == 0 ? M1K_CHA_50R_2V5 : M1K_CHB_50R_2V5;
+		frontend[ch].r50_2v5 = val;
+	} else if (name == "r50_gnd") {
+		pin = ch == 0 ? M1K_CHA_50R_GND : M1K_CHB_50R_GND;
+		frontend[ch].r50_gnd = val;
+	} else if (name == "feedback") {
+		pin = ch == 0 ? M1K_CHA_FEEDBACK : M1K_CHB_FEEDBACK;
+		frontend[ch].feedback = val;
+	} else if (name == "output_en") {
+		pin = ch == 0 ? M1K_CHA_OUTPUT_EN : M1K_CHB_OUTPUT_EN;
+		frontend[ch].output_en = val;
+	} else if (name == "split") {
+		pin = ch == 0 ? M1K_CHA_SPLIT : M1K_CHB_SPLIT;
+		frontend[ch].split = val;
+		// SPLIT pin is active HIGH (opposite of others)
+		setGPIO(pin, val);
+		return;
+	} else {
+		return;
+	}
+	// Active LOW switches: true = ON = pin LOW
+	setGPIO(pin, !val);
+}
+
+// --- ADM1177 power monitoring ---
+
+JSONNode M1K_device::readPower() {
+	uint8_t buf[3];
+	int r = controlTransfer(0xC0, 0x17, 0, 3, buf, 3);
+
+	JSONNode n(JSON_NODE);
+	if (r >= 1) {
+		n.push_back(JSONNode("status_raw", (int)buf[0]));
+		// Alert bit position depends on firmware version
+		uint8_t alert_bit = (_fwversion >= "2.11") ? 0x8 : 0x4;
+		n.push_back(JSONNode("alert_bit", (int)alert_bit));
+		n.push_back(JSONNode("overcurrent", (buf[0] & alert_bit) != 0));
+	} else {
+		n.push_back(JSONNode("status_raw", 0));
+		n.push_back(JSONNode("alert_bit", 0));
+		n.push_back(JSONNode("overcurrent", false));
+		n.push_back(JSONNode("error", r));
+	}
+	return n;
+}
+
+// --- Temperature ---
+
+JSONNode M1K_device::readTemperature() {
+	uint8_t buf[2];
+	JSONNode n(JSON_NODE);
+
+	int r = controlTransfer(0xC0, 0x19, 0, 0, buf, 2);
+	if (r >= 2) {
+		n.push_back(JSONNode("a", (int)((buf[0] << 8) | buf[1])));
+	} else {
+		n.push_back(JSONNode("a", 0));
+	}
+
+	r = controlTransfer(0xC0, 0x19, 1, 0, buf, 2);
+	if (r >= 2) {
+		n.push_back(JSONNode("b", (int)((buf[0] << 8) | buf[1])));
+	} else {
+		n.push_back(JSONNode("b", 0));
+	}
+
+	return n;
+}
+
+// --- LEDs ---
+
+JSONNode M1K_device::ledToJSON() {
+	JSONNode n(JSON_NODE);
+	n.push_back(JSONNode("leds", (int)ledState));
+	n.push_back(JSONNode("red", (ledState & 0x4) != 0));
+	n.push_back(JSONNode("green", (ledState & 0x2) != 0));
+	n.push_back(JSONNode("blue", (ledState & 0x1) != 0));
+	return n;
+}
+
+void M1K_device::setLEDs(uint8_t state) {
+	ledState = state & 0x7;
+	controlTransfer(0x40, 0x03, ledState, 0, 0, 0);
+}
+
 // --- WebSocket message handling ---
 
 bool M1K_device::processMessage(ClientConn& client, string& cmd, JSONNode& n) {
@@ -493,6 +636,119 @@ bool M1K_device::processMessage(ClientConn& client, string& cmd, JSONNode& n) {
 		client.sendJSON(reply);
 		return true;
 
+	} else if (cmd == "getFrontend") {
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode fe = frontendToJSON();
+		fe.set_name("frontend");
+		reply.push_back(fe);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "setFrontend") {
+		string ch = jsonStringProp(n, "channel");
+		unsigned ch_idx = (ch == "b" || ch == "B") ? 1 : 0;
+
+		// Switch controls (optional)
+		{ JSONNode::iterator i = n.find("r50_2v5");
+		  if (i != n.end()) setFrontendSwitch(ch_idx, "r50_2v5", i->as_bool()); }
+		{ JSONNode::iterator i = n.find("r50_gnd");
+		  if (i != n.end()) setFrontendSwitch(ch_idx, "r50_gnd", i->as_bool()); }
+		{ JSONNode::iterator i = n.find("feedback");
+		  if (i != n.end()) setFrontendSwitch(ch_idx, "feedback", i->as_bool()); }
+		{ JSONNode::iterator i = n.find("output_en");
+		  if (i != n.end()) setFrontendSwitch(ch_idx, "output_en", i->as_bool()); }
+		{ JSONNode::iterator i = n.find("split");
+		  if (i != n.end()) setFrontendSwitch(ch_idx, "split", i->as_bool()); }
+
+		// Digipot (optional)
+		int pot_r1 = jsonIntProp(n, "pot_r1", -1);
+		int pot_r2 = jsonIntProp(n, "pot_r2", -1);
+		if (pot_r1 >= 0 || pot_r2 >= 0) {
+			uint8_t r1 = (pot_r1 >= 0) ? (pot_r1 & 0x7f) : frontend[ch_idx].pot_r1;
+			uint8_t r2 = (pot_r2 >= 0) ? (pot_r2 & 0x7f) : frontend[ch_idx].pot_r2;
+			setDigipot(ch_idx, r1, r2);
+		}
+
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode fe = frontendToJSON();
+		fe.set_name("frontend");
+		reply.push_back(fe);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "getPower") {
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode pw = readPower();
+		pw.set_name("power");
+		reply.push_back(pw);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "getTemperature") {
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode temp = readTemperature();
+		temp.set_name("temperature");
+		reply.push_back(temp);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "getLED") {
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode led = ledToJSON();
+		led.set_name("leds");
+		reply.push_back(led);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "setLED") {
+		int val = jsonIntProp(n, "leds", -1);
+		if (val >= 0) {
+			setLEDs(val & 0x7);
+		} else {
+			// Build from individual booleans
+			uint8_t state = ledState;
+			{ JSONNode::iterator i = n.find("red");
+			  if (i != n.end()) { if (i->as_bool()) state |= 0x4; else state &= ~0x4; } }
+			{ JSONNode::iterator i = n.find("green");
+			  if (i != n.end()) { if (i->as_bool()) state |= 0x2; else state &= ~0x2; } }
+			{ JSONNode::iterator i = n.find("blue");
+			  if (i != n.end()) { if (i->as_bool()) state |= 0x1; else state &= ~0x1; } }
+			setLEDs(state);
+		}
+
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		JSONNode led = ledToJSON();
+		led.set_name("leds");
+		reply.push_back(led);
+		client.sendJSON(reply);
+		return true;
+
+	} else if (cmd == "setSerial") {
+		string newSerial = jsonStringProp(n, "serial", "");
+		int r = -1;
+		if (newSerial.size() > 0 && newSerial.size() <= 32) {
+			r = controlTransfer(0x40, 0x05, 0, 0, (uint8_t*)newSerial.data(), newSerial.size());
+		}
+
+		JSONNode reply(JSON_NODE);
+		reply.push_back(JSONNode("_action", "return"));
+		reply.push_back(JSONNode("id", jsonIntProp(n, "id", 0)));
+		reply.push_back(JSONNode("status", r));
+		client.sendJSON(reply);
+		return true;
+
 	} else {
 		return USB_device::processMessage(client, cmd, n)
 			|| StreamingDevice::processMessage(client, cmd, n);
@@ -502,7 +758,205 @@ bool M1K_device::processMessage(ClientConn& client, string& cmd, JSONNode& n) {
 // --- REST API ---
 
 bool M1K_device::handleREST(UrlPath path, session_ptr client) {
-	return StreamingDevice::handleREST(path, client);
+	if (!path.leaf() && path.matches("frontend")) {
+		if (client->get_method() == "POST") {
+			client->read_http_post_body(
+				boost::bind(
+					&M1K_device::handleRESTFrontendCallback,
+					boost::static_pointer_cast<M1K_device>(shared_from_this()),
+					client, _1));
+		} else {
+			JSONNode j = frontendToJSON();
+			respondJSON(client, j);
+		}
+		return true;
+
+	} else if (!path.leaf() && path.matches("power")) {
+		JSONNode j = readPower();
+		respondJSON(client, j);
+		return true;
+
+	} else if (!path.leaf() && path.matches("temperature")) {
+		JSONNode j = readTemperature();
+		respondJSON(client, j);
+		return true;
+
+	} else if (!path.leaf() && path.matches("leds")) {
+		if (client->get_method() == "POST") {
+			client->read_http_post_body(
+				boost::bind(
+					&M1K_device::handleRESTLEDCallback,
+					boost::static_pointer_cast<M1K_device>(shared_from_this()),
+					client, _1));
+		} else {
+			JSONNode j = ledToJSON();
+			respondJSON(client, j);
+		}
+		return true;
+
+	} else if (!path.leaf() && path.matches("calibration")) {
+		if (client->get_method() == "POST") {
+			client->read_http_post_body(
+				boost::bind(
+					&M1K_device::handleRESTCalibrationCallback,
+					boost::static_pointer_cast<M1K_device>(shared_from_this()),
+					client, _1));
+		} else {
+			JSONNode j(JSON_NODE);
+			j.push_back(JSONNode("valid", cal.eeprom_valid == M1K_EEPROM_VALID));
+
+			JSONNode offsets(JSON_ARRAY);
+			offsets.set_name("offset");
+			JSONNode gp(JSON_ARRAY);
+			gp.set_name("gain_p");
+			JSONNode gn(JSON_ARRAY);
+			gn.set_name("gain_n");
+			for (int i = 0; i < 8; i++) {
+				offsets.push_back(JSONNode("", cal.offset[i]));
+				gp.push_back(JSONNode("", cal.gain_p[i]));
+				gn.push_back(JSONNode("", cal.gain_n[i]));
+			}
+			j.push_back(offsets);
+			j.push_back(gp);
+			j.push_back(gn);
+			respondJSON(client, j);
+		}
+		return true;
+
+	} else if (!path.leaf() && path.matches("serial")) {
+		if (client->get_method() == "POST") {
+			client->read_http_post_body(
+				boost::bind(
+					&M1K_device::handleRESTSerialCallback,
+					boost::static_pointer_cast<M1K_device>(shared_from_this()),
+					client, _1));
+		} else {
+			JSONNode j(JSON_NODE);
+			j.push_back(JSONNode("serial", string(serial)));
+			respondJSON(client, j);
+		}
+		return true;
+
+	} else {
+		return StreamingDevice::handleREST(path, client);
+	}
+}
+
+// --- REST callbacks ---
+
+void M1K_device::handleRESTFrontendCallback(session_ptr client, string postdata) {
+	try {
+		std::map<string, string> map;
+		parse_query(postdata, map);
+
+		string ch = map_get(map, "channel", "a");
+		unsigned ch_idx = (ch == "b" || ch == "B") ? 1 : 0;
+
+		string val;
+		val = map_get(map, "r50_2v5", "");
+		if (val.size()) setFrontendSwitch(ch_idx, "r50_2v5", val == "true" || val == "1");
+		val = map_get(map, "r50_gnd", "");
+		if (val.size()) setFrontendSwitch(ch_idx, "r50_gnd", val == "true" || val == "1");
+		val = map_get(map, "feedback", "");
+		if (val.size()) setFrontendSwitch(ch_idx, "feedback", val == "true" || val == "1");
+		val = map_get(map, "output_en", "");
+		if (val.size()) setFrontendSwitch(ch_idx, "output_en", val == "true" || val == "1");
+		val = map_get(map, "split", "");
+		if (val.size()) setFrontendSwitch(ch_idx, "split", val == "true" || val == "1");
+
+		val = map_get(map, "pot_r1", "");
+		string val2 = map_get(map, "pot_r2", "");
+		if (val.size() || val2.size()) {
+			uint8_t r1 = val.size() ? (atoi(val.c_str()) & 0x7f) : frontend[ch_idx].pot_r1;
+			uint8_t r2 = val2.size() ? (atoi(val2.c_str()) & 0x7f) : frontend[ch_idx].pot_r2;
+			setDigipot(ch_idx, r1, r2);
+		}
+
+		JSONNode j = frontendToJSON();
+		respondJSON(client, j);
+	} catch (std::exception& e) {
+		respondError(client, e);
+	}
+}
+
+void M1K_device::handleRESTLEDCallback(session_ptr client, string postdata) {
+	try {
+		std::map<string, string> map;
+		parse_query(postdata, map);
+
+		string raw = map_get(map, "leds", "");
+		if (raw.size()) {
+			setLEDs(atoi(raw.c_str()) & 0x7);
+		} else {
+			uint8_t state = ledState;
+			string val;
+			val = map_get(map, "red", "");
+			if (val.size()) { if (val == "true" || val == "1") state |= 0x4; else state &= ~0x4; }
+			val = map_get(map, "green", "");
+			if (val.size()) { if (val == "true" || val == "1") state |= 0x2; else state &= ~0x2; }
+			val = map_get(map, "blue", "");
+			if (val.size()) { if (val == "true" || val == "1") state |= 0x1; else state &= ~0x1; }
+			setLEDs(state);
+		}
+
+		JSONNode j = ledToJSON();
+		respondJSON(client, j);
+	} catch (std::exception& e) {
+		respondError(client, e);
+	}
+}
+
+void M1K_device::handleRESTCalibrationCallback(session_ptr client, string postdata) {
+	try {
+		JSONNode n = libjson::parse(postdata);
+
+		JSONNode::iterator it = n.find("reset");
+		if (it != n.end() && it->as_bool()) {
+			for (int i = 0; i < 8; i++) {
+				cal.offset[i] = 0.0;
+				cal.gain_p[i] = 1.0;
+				cal.gain_n[i] = 1.0;
+			}
+		} else {
+			JSONNode j_off = n.at("offset");
+			JSONNode j_gp = n.at("gain_p");
+			JSONNode j_gn = n.at("gain_n");
+			for (int i = 0; i < 8; i++) {
+				cal.offset[i] = j_off[i].as_float();
+				cal.gain_p[i] = j_gp[i].as_float();
+				cal.gain_n[i] = j_gn[i].as_float();
+			}
+		}
+		cal.eeprom_valid = M1K_EEPROM_VALID;
+		int r = controlTransfer(0x40, 0x02, 0, 0, (uint8_t*)&cal, sizeof(cal));
+
+		JSONNode j(JSON_NODE);
+		j.push_back(JSONNode("status", r));
+		j.push_back(JSONNode("valid", true));
+		respondJSON(client, j);
+	} catch (std::exception& e) {
+		respondError(client, e);
+	}
+}
+
+void M1K_device::handleRESTSerialCallback(session_ptr client, string postdata) {
+	try {
+		std::map<string, string> map;
+		parse_query(postdata, map);
+		string newSerial = map_get(map, "serial", "");
+
+		int r = -1;
+		if (newSerial.size() > 0 && newSerial.size() <= 32) {
+			r = controlTransfer(0x40, 0x05, 0, 0, (uint8_t*)newSerial.data(), newSerial.size());
+		}
+
+		JSONNode j(JSON_NODE);
+		j.push_back(JSONNode("status", r));
+		j.push_back(JSONNode("serial", newSerial));
+		respondJSON(client, j);
+	} catch (std::exception& e) {
+		respondError(client, e);
+	}
 }
 
 // --- USB transfer callbacks ---
