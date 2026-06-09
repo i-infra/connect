@@ -264,7 +264,9 @@ void CEE_device::configure(int mode, double _sampleTime, unsigned samples, bool 
 	
 	// Clean up previous configuration
 	delete channel_a.source;
+	channel_a.source = nullptr;
 	delete channel_b.source;
+	channel_b.source = nullptr;
 	channels.clear();
 	channel_a.streams.clear();
 	channel_b.streams.clear();

@@ -154,6 +154,7 @@ WsSession::WsSession(websocket::stream<beast::tcp_stream>&& ws,
 	: ws_(std::move(ws))
 	, resource_(std::string(original_req.target()))
 	, method_(std::string(original_req.method_string()))
+	, writing_(false)
 	, closed_(false)
 {
 	// Copy headers from original request
@@ -191,23 +192,54 @@ bool WsSession::is_closed() const {
 
 void WsSession::send(const std::string& msg) {
 	if (closed_ || !ws_.is_open()) return;
-	boost::system::error_code ec;
-	ws_.text(true);
-	ws_.write(net::buffer(msg), ec);
-	if (ec) {
-		closed_ = true;
+	write_queue_.push(msg);
+	if (!writing_) {
+		do_write();
 	}
 }
 
-bool WsSession::read_message(std::string& out) {
-	if (closed_ || !ws_.is_open()) return false;
-	beast::flat_buffer buffer;
-	boost::system::error_code ec;
-	ws_.read(buffer, ec);
-	if (ec) {
-		closed_ = true;
-		return false;
+void WsSession::do_write() {
+	if (write_queue_.empty()) {
+		writing_ = false;
+		return;
 	}
-	out = beast::buffers_to_string(buffer.data());
-	return true;
+	writing_ = true;
+	auto self = shared_from_this();
+	ws_.text(true);
+	ws_.async_write(net::buffer(write_queue_.front()),
+		[self](boost::system::error_code ec, std::size_t) {
+			if (ec) {
+				self->closed_ = true;
+				return;
+			}
+			self->write_queue_.pop();
+			self->do_write();
+		});
+}
+
+void WsSession::start_async_read(
+	std::function<void(std::shared_ptr<WsSession>, std::string)> on_message,
+	std::function<void(std::shared_ptr<WsSession>)> on_close)
+{
+	on_message_ = std::move(on_message);
+	on_close_ = std::move(on_close);
+	do_read();
+}
+
+void WsSession::do_read() {
+	auto self = shared_from_this();
+	ws_.async_read(read_buf_,
+		[self](boost::system::error_code ec, std::size_t) {
+			if (ec) {
+				self->closed_ = true;
+				if (self->on_close_)
+					self->on_close_(self);
+				return;
+			}
+			std::string msg = beast::buffers_to_string(self->read_buf_.data());
+			self->read_buf_.consume(self->read_buf_.size());
+			if (self->on_message_)
+				self->on_message_(self, std::move(msg));
+			self->do_read();
+		});
 }

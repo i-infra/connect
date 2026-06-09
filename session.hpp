@@ -8,6 +8,7 @@
 
 #include <string>
 #include <map>
+#include <queue>
 #include <memory>
 #include <functional>
 #include <boost/asio.hpp>
@@ -100,13 +101,23 @@ public:
 	bool is_closed() const override;
 	void send(const std::string& msg) override;
 
-	/// Read one text message. Returns false on close/error.
-	bool read_message(std::string& out);
+	/// Start async read loop on the io_context.
+	/// Calls on_message for each received message, on_close when done.
+	void start_async_read(std::function<void(std::shared_ptr<WsSession>, std::string)> on_message,
+	                      std::function<void(std::shared_ptr<WsSession>)> on_close);
 
 private:
+	void do_read();
+	void do_write();
+
 	websocket::stream<beast::tcp_stream> ws_;
+	beast::flat_buffer read_buf_;
 	std::string resource_;
 	std::string method_;
 	std::map<std::string, std::string> headers_;
+	std::function<void(std::shared_ptr<WsSession>, std::string)> on_message_;
+	std::function<void(std::shared_ptr<WsSession>)> on_close_;
+	std::queue<std::string> write_queue_;
+	bool writing_;
 	bool closed_;
 };

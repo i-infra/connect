@@ -71,12 +71,18 @@ static void do_session(beast::tcp_stream&& stream) {
 				auto ws_session = std::make_shared<WsSession>(std::move(ws), req);
 				ws_on_open(ws_session);
 
-				std::string msg;
-				while (ws_session->read_message(msg)) {
-					ws_on_message(ws_session, msg);
-				}
-
-				ws_on_close(ws_session);
+				// Read loop runs on a dedicated thread so it doesn't block
+				// the io_context. Messages and close are posted back to the
+				// io_context for thread-safe processing.
+				// Async read loop — runs on io_context so it doesn't
+				// block USB data callbacks from being dispatched.
+				ws_session->start_async_read(
+					[](std::shared_ptr<WsSession> s, std::string msg) {
+						ws_on_message(s, msg);
+					},
+					[](std::shared_ptr<WsSession> s) {
+						ws_on_close(s);
+					});
 				return;
 			}
 		}
