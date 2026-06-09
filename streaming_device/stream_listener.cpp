@@ -27,7 +27,7 @@ StreamListener::StreamListener():
 	triggerSubsampleError(0){}
 
 listener_ptr makeStreamListener(StreamingDevice* dev, ClientConn* client, JSONNode &n){
-	std::auto_ptr<WSStreamListener> listener(new WSStreamListener());
+	std::unique_ptr<WSStreamListener> listener(new WSStreamListener());
 
 	listener->id = jsonIntProp(n, "id");
 	listener->device = dev;

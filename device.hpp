@@ -41,7 +41,7 @@ class Device: public boost::enable_shared_from_this<Device> {
 		virtual const string fwVersion(){return "unknown";}
 		
 		virtual bool processMessage(ClientConn& session, string& cmd, JSONNode& n){ return false; }
-		virtual bool handleREST(UrlPath path, websocketpp::session_ptr client){return false;}
+		virtual bool handleREST(UrlPath path, session_ptr client){return false;}
 		
 		virtual void onDisconnect();
 		

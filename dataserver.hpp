@@ -16,12 +16,12 @@
 using std::string;
 
 #include <boost/asio.hpp>
-extern boost::asio::io_service io;
+extern boost::asio::io_context io;
 
 #include "libjson/libjson.h"
-#include "websocketpp.hpp"
-void respondJSON(websocketpp::session_ptr client, JSONNode &n, int status=200);
-void respondError(websocketpp::session_ptr client, std::exception& e);
+#include "session.hpp"
+void respondJSON(session_ptr client, JSONNode &n, int status=200);
+void respondError(session_ptr client, std::exception& e);
 
 #include "event.hpp"
 #include "device.hpp"
@@ -40,4 +40,3 @@ void usb_scan_devices();
 void usb_thread_main();
 
 #include "json_helpers.hpp"
-

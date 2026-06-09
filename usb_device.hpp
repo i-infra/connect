@@ -8,7 +8,7 @@
 
 #pragma once
 #include <iostream>
-#include <libusb/libusb.h>
+#include <libusb-1.0/libusb.h>
 
 class USB_device{
 	public:

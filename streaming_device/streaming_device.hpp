@@ -93,7 +93,7 @@ class StreamingDevice: public Device{
 		virtual void onClientAttach(ClientConn *c);
 		virtual void onClientDetach(ClientConn *c);
 		virtual bool processMessage(ClientConn& session, string& cmd, JSONNode& n);
-		virtual bool handleREST(UrlPath path, websocketpp::session_ptr client);
+		virtual bool handleREST(UrlPath path, session_ptr client);
 		
 		listener_set_t listeners;
 		virtual void addListener(listener_ptr l);
@@ -232,15 +232,15 @@ class StreamingDevice: public Device{
 		void done_capture();
 		void handleNewData();
 		
-		void RESTOutputRespond(websocketpp::session_ptr client, Channel *channel);
-		void handleRESTOutputCallback(websocketpp::session_ptr client, Channel* channel, string postdata);
-		bool handleRESTOutput(UrlPath path, websocketpp::session_ptr client, Channel* channel);
-		bool handleRESTInput(UrlPath path, websocketpp::session_ptr client, Channel* channel);
-		void handleRESTInputPOSTCallback(websocketpp::session_ptr client, Channel* channel, string postdata);
-		void handleRESTDeviceCallback(websocketpp::session_ptr client, string postdata);
-		void RESTDeviceRespond(websocketpp::session_ptr client);
-		void handleRESTConfigurationCallback(websocketpp::session_ptr client, string postdata);
-		void RESTConfigurationRespond(websocketpp::session_ptr client);
+		void RESTOutputRespond(session_ptr client, Channel *channel);
+		void handleRESTOutputCallback(session_ptr client, Channel* channel, string postdata);
+		bool handleRESTOutput(UrlPath path, session_ptr client, Channel* channel);
+		bool handleRESTInput(UrlPath path, session_ptr client, Channel* channel);
+		void handleRESTInputPOSTCallback(session_ptr client, Channel* channel, string postdata);
+		void handleRESTDeviceCallback(session_ptr client, string postdata);
+		void RESTDeviceRespond(session_ptr client);
+		void handleRESTConfigurationCallback(session_ptr client, string postdata);
+		void RESTConfigurationRespond(session_ptr client);
 		
 		virtual void on_reset_capture() = 0;
 		virtual void on_start_capture() = 0;

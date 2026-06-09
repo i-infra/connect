@@ -9,29 +9,29 @@
 #include <string>
 #include <boost/foreach.hpp>
 
-#include "websocketpp.hpp"
+#include "session.hpp"
 #include "url.hpp"
 #include "json.hpp"
 
-void respondJSON(websocketpp::session_ptr client, JSONNode &n, int status){
+void respondJSON(session_ptr client, JSONNode &n, int status){
 	string jc = (string) n.write_formatted();
 	client->start_http(status, jc);
 }
 
 
-void respondError(websocketpp::session_ptr client, std::exception& e){
+void respondError(session_ptr client, std::exception& e){
 	JSONNode j;
 	j.push_back(JSONNode("error", e.what()));
 	std::cerr << "Exception while processing request: " << e.what() <<std::endl;
 	respondJSON(client, j, 402);
 }
 
-void deviceListRequest(websocketpp::session_ptr client){
+void deviceListRequest(session_ptr client){
 	JSONNode n = jsonDevicesArray(true);
 	respondJSON(client, n);
 }
 
-bool deviceRequest(UrlPath path, websocketpp::session_ptr client){
+bool deviceRequest(UrlPath path, session_ptr client){
 	device_ptr device = getDeviceById(path.get());
 	if (device)
 		return device->handleREST(path.sub(), client);
@@ -39,7 +39,7 @@ bool deviceRequest(UrlPath path, websocketpp::session_ptr client){
 		return false;
 }
 
-void handleJSONRequest(UrlPath path, websocketpp::session_ptr client){
+void handleJSONRequest(UrlPath path, session_ptr client){
 	client->set_header("Access-Control-Allow-Origin", client->get_client_header("Origin"));
 	if (path.leaf()){
 		client->start_http(404, "No API version selected.");

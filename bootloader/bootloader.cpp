@@ -14,7 +14,7 @@
 #include <iostream>
 #include <ios>
 #include <iomanip>
-#include <libusb/libusb.h>
+#include <libusb-1.0/libusb.h>
 #include <sys/timeb.h>
 #include <boost/bind.hpp>
 using namespace std;

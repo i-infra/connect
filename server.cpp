@@ -7,7 +7,6 @@
 //   Kevin Mehall <km@kevinmehall.net>
 
 #include <iostream>
-#include "websocketpp.hpp"
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
 #include <boost/regex.hpp>
@@ -19,8 +18,8 @@
 using boost::asio::ip::tcp;
 const unsigned short port = 9003;
 
-std::set <device_ptr> devices;
-boost::asio::io_service io;
+std::set<device_ptr> devices;
+boost::asio::io_context io;
 
 bool debugFlag = false;
 bool allowRemote = false;
@@ -29,78 +28,136 @@ bool allowAnyOrigin = false;
 Event device_list_changed;
 Event capture_state_changed;
 
-int main(int argc, char* argv[]){	
-	data_server_handler_ptr handler(new data_server_handler());
-	
+void handleJSONRequest(UrlPath path, session_ptr client);
+
+static void do_session(beast::tcp_stream&& stream);
+
+static void do_accept(tcp::acceptor& acceptor) {
+	acceptor.async_accept(
+		net::make_strand(io),
+		[&acceptor](boost::system::error_code ec, tcp::socket socket) {
+			if (!ec) {
+				boost::asio::post(io, [s = beast::tcp_stream(std::move(socket))]() mutable {
+					do_session(std::move(s));
+				});
+			}
+			do_accept(acceptor);
+		});
+}
+
+static void do_session(beast::tcp_stream&& stream) {
+	try {
+		beast::flat_buffer buffer;
+		http::request<http::string_body> req;
+
+		stream.expires_after(std::chrono::seconds(30));
+		http::read(stream, buffer, req);
+		stream.expires_never();
+
+		const std::string resource(req.target());
+
+		// Check if this is a WebSocket upgrade to /ws
+		if (websocket::is_upgrade(req)) {
+			Url url(resource);
+			UrlPath path(url, 1);
+			if (!path.leaf() && path.matches("ws")) {
+				websocket::stream<beast::tcp_stream> ws(std::move(stream));
+				ws.set_option(websocket::stream_base::decorator(
+					[](websocket::response_type& res) {
+						res.set(http::field::server, "Nonolith Connect");
+					}));
+				ws.accept(req);
+
+				auto ws_session = std::make_shared<WsSession>(std::move(ws), req);
+				ws_on_open(ws_session);
+
+				std::string msg;
+				while (ws_session->read_message(msg)) {
+					ws_on_message(ws_session, msg);
+				}
+
+				ws_on_close(ws_session);
+				return;
+			}
+		}
+
+		// HTTP request
+		auto session = std::make_shared<HttpSession>(std::move(stream), std::move(req));
+		on_client_connect(session);
+
+	} catch (boost::system::system_error& se) {
+		if (se.code() != http::error::end_of_stream)
+			std::cerr << "HTTP error: " << se.what() << std::endl;
+	} catch (std::exception& e) {
+		std::cerr << "Session error: " << e.what() << std::endl;
+	}
+}
+
+int main(int argc, char* argv[]) {
 	try {
 		usb_init();
-		
-		for (int i=1; i<argc; i++){
+
+		for (int i = 1; i < argc; i++) {
 			string arg(argv[i]);
-			if (arg=="debug") debugFlag = true;
-			if (arg=="allow-remote") allowRemote = true;
-			if (arg=="allow-any-origin") allowAnyOrigin = true;
+			if (arg == "debug") debugFlag = true;
+			if (arg == "allow-remote") allowRemote = true;
+			if (arg == "allow-any-origin") allowAnyOrigin = true;
 		}
-		
+
 		boost::asio::ip::address_v4 bind_addr;
 		if (!allowRemote) bind_addr = boost::asio::ip::address_v4::loopback();
-		
+
 		tcp::endpoint endpoint(bind_addr, port);
-		websocketpp::server_ptr server(new websocketpp::server(io, endpoint, handler));
-		
-		server->set_max_message_size(0xFFFFF); // 1024KiB
-		//server->set_elog_level(0);
-		server->start_accept();
+		tcp::acceptor acceptor(io, endpoint);
+		acceptor.set_option(net::socket_base::reuse_address(true));
+
+		do_accept(acceptor);
 
 		usb_scan_devices();
-		
+
 		io.run();
 	} catch (std::exception& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	}
-	
+
 	return 0;
 }
 
 const string redir_url = "http://www.nonolithlabs.com/connect/?utm_source=connect&utm_medium=app&utm_campaign=server-redir";
 
-void handleJSONRequest(UrlPath path, websocketpp::session_ptr client);
-
-void data_server_handler::on_client_connect(websocketpp::session_ptr client){
+void on_client_connect(session_ptr client) {
 	static const boost::regex nonolith_domain("^https?://[[:w:]\\.-]*?nonolithlabs.com$");
 	static const boost::regex localhost_domain("^https?://localhost(:[[:d:]]+)?$");
 	const string origin = client->get_client_header("Origin");
 
-	if (!allowAnyOrigin 
-			&& origin!=""
-			&& origin!="null"
-			&& !regex_match(origin, localhost_domain) 
+	if (!allowAnyOrigin
+			&& origin != ""
+			&& origin != "null"
+			&& !regex_match(origin, localhost_domain)
 			&& !regex_match(origin, nonolith_domain)
-			){
+			) {
 		client->start_http(403, "Origin not allowed");
 		std::cerr << "Rejected client with unknown origin " << origin << std::endl;
 		return;
 	}
-	
+
 	const std::string resource = client->get_resource();
 	Url url(resource);
 	UrlPath path(url, 1);
 
-	try{
-		if (path.leaf()){ // "/"
+	try {
+		if (path.leaf()) { // "/"
 			client->set_header("Location", redir_url);
 			client->start_http(301);
-		}else if (path.matches("rest")){
+		} else if (path.matches("rest")) {
 			handleJSONRequest(path.sub(), client);
-		}else if (path.matches("ws")){
-			client->start_websocket();
-		}else{
+		} else {
 			client->start_http(404, "Not found");
 		}
-	}catch(std::exception& e){
+	} catch (std::exception& e) {
 		JSONNode j;
 		j.push_back(JSONNode("error", e.what()));
-		std::cerr << "Exception while processing request: " << e.what() <<std::endl;
+		std::cerr << "Exception while processing request: " << e.what() << std::endl;
 		respondJSON(client, j, 500);
 	}
 }

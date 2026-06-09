@@ -11,7 +11,7 @@
 #include <iostream>
 #include <vector>
 #include <fstream>
-#include <libusb/libusb.h>
+#include <libusb-1.0/libusb.h>
 #include <sys/timeb.h>
 #include <boost/bind.hpp>
 using namespace std;
@@ -228,7 +228,7 @@ JSONNode CEE_device::gpio(bool set, uint8_t dir, uint8_t out){
 	return j;
 }
 
-void CEE_device::handleRESTGPIOCallback(websocketpp::session_ptr client, string postdata){
+void CEE_device::handleRESTGPIOCallback(session_ptr client, string postdata){
 	try{
 		std::map<string, string> map;
 		parse_query(postdata, map);
@@ -241,7 +241,7 @@ void CEE_device::handleRESTGPIOCallback(websocketpp::session_ptr client, string 
 	}
 }
 
-bool CEE_device::handleREST(UrlPath path, websocketpp::session_ptr client){
+bool CEE_device::handleREST(UrlPath path, session_ptr client){
 	if (!path.leaf() && path.matches("gpio")){
 		if (client->get_method() == "POST"){
 			client->read_http_post_body(
@@ -622,7 +622,7 @@ extern "C" void LIBUSB_CALL in_transfer_callback(libusb_transfer *t){
 
 	if (t->status == LIBUSB_TRANSFER_COMPLETED){
 		//cerr <<  millis() << " " << t << " complete " << t->actual_length << endl;
-		io.post(boost::bind(&CEE_device::handleInTransfer, dev, t->buffer));
+		boost::asio::post(io, boost::bind(&CEE_device::handleInTransfer, dev, t->buffer));
 		t->buffer = (unsigned char*) malloc(sizeof(IN_packet) * dev->packets_per_transfer);
 
 		if (DISABLE_SELF_STOP || dev->captureContinuous || dev->incount*IN_SAMPLES_PER_PACKET < dev->captureSamples){

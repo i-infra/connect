@@ -12,17 +12,18 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string.hpp>
 #include <sstream>
+#include <boost/bind.hpp>
 #include <boost/foreach.hpp>
 
 //// device/channel/output resource
 
-void StreamingDevice::RESTOutputRespond(websocketpp::session_ptr client, Channel *channel){
+void StreamingDevice::RESTOutputRespond(session_ptr client, Channel *channel){
 	JSONNode n;
 	channel->source->describeJSON(n);
 	respondJSON(client, n);
 }
 
-void StreamingDevice::handleRESTOutputCallback(websocketpp::session_ptr client, Channel* channel, string postdata){
+void StreamingDevice::handleRESTOutputCallback(session_ptr client, Channel* channel, string postdata){
 	try{
 		if (postdata[0] == '{'){
 			JSONNode n = libjson::parse(postdata);
@@ -109,7 +110,7 @@ void StreamingDevice::handleRESTOutputCallback(websocketpp::session_ptr client, 
 	}
 }
 
-bool StreamingDevice::handleRESTOutput(UrlPath path, websocketpp::session_ptr client, Channel* channel){
+bool StreamingDevice::handleRESTOutput(UrlPath path, session_ptr client, Channel* channel){
 	if (client->get_method() == "POST"){
 		client->read_http_post_body(
 			boost::bind(
@@ -127,7 +128,7 @@ bool StreamingDevice::handleRESTOutput(UrlPath path, websocketpp::session_ptr cl
 //// device/channel/input resource
 
 struct RESTListener: public StreamListener{
-	websocketpp::session_ptr client;
+	session_ptr client;
 	
 	virtual bool handleNewData(){
 		if (client->is_closed()){
@@ -164,7 +165,7 @@ struct RESTListener: public StreamListener{
 	}
 };
 
-bool StreamingDevice::handleRESTInput(UrlPath path, websocketpp::session_ptr client, Channel* channel){
+bool StreamingDevice::handleRESTInput(UrlPath path, session_ptr client, Channel* channel){
 	if (client->get_method() == "POST"){
 		client->read_http_post_body(
 			boost::bind(
@@ -214,7 +215,7 @@ bool StreamingDevice::handleRESTInput(UrlPath path, websocketpp::session_ptr cli
 	return true;
 }
 
-void StreamingDevice::handleRESTInputPOSTCallback(websocketpp::session_ptr client, Channel* channel, string postdata){
+void StreamingDevice::handleRESTInputPOSTCallback(session_ptr client, Channel* channel, string postdata){
 	try{
 		std::map<string, string> map;
 		parse_query(postdata, map);
@@ -239,12 +240,12 @@ void StreamingDevice::handleRESTInputPOSTCallback(websocketpp::session_ptr clien
 
 /// Device resource
 
-void StreamingDevice::RESTDeviceRespond(websocketpp::session_ptr client){
+void StreamingDevice::RESTDeviceRespond(session_ptr client){
 	JSONNode jstate = stateToJSON();
 	respondJSON(client, jstate);
 }
 
-void StreamingDevice::handleRESTDeviceCallback(websocketpp::session_ptr client, string postdata){
+void StreamingDevice::handleRESTDeviceCallback(session_ptr client, string postdata){
 	try{
 		if (postdata[0] == '{'){
 			//TODO: json
@@ -268,19 +269,19 @@ void StreamingDevice::handleRESTDeviceCallback(websocketpp::session_ptr client, 
 
 /// Channel resource
 
-void handleRESTChannel(websocketpp::session_ptr client, Channel* channel){
+void handleRESTChannel(session_ptr client, Channel* channel){
 	JSONNode n = channel->toJSON();
 	respondJSON(client, n);
 }
 
 /// Configuration resource
 
-void StreamingDevice::RESTConfigurationRespond(websocketpp::session_ptr client){
+void StreamingDevice::RESTConfigurationRespond(session_ptr client){
 	JSONNode jstate = stateToJSON(true);
 	respondJSON(client, jstate);
 }
 
-void StreamingDevice::handleRESTConfigurationCallback(websocketpp::session_ptr client, string postdata){
+void StreamingDevice::handleRESTConfigurationCallback(session_ptr client, string postdata){
 	try{
 		if (postdata[0] == '{'){
 			//TODO: json
@@ -308,7 +309,7 @@ void StreamingDevice::handleRESTConfigurationCallback(websocketpp::session_ptr c
 
 /// Dispatch
 
-bool StreamingDevice::handleREST(UrlPath path, websocketpp::session_ptr client){
+bool StreamingDevice::handleREST(UrlPath path, session_ptr client){
 	if (path.leaf()){
 		if (client->get_method() == "POST"){
 			client->read_http_post_body(

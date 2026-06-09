@@ -7,10 +7,11 @@
 //   Kevin Mehall <km@kevinmehall.net>
 
 #include <iostream>
-#include <libusb/libusb.h>
+#include <libusb-1.0/libusb.h>
 #include <vector>
 #include <map>
 #include <boost/thread.hpp>
+#include <boost/bind.hpp>
 
 #include "dataserver.hpp"
 #include "cee/cee.hpp"
@@ -26,8 +27,22 @@ boost::thread* usb_thread;
 #define CEE_PID 0xCEE1
 #define BOOTLOADER_PID 0xBBBB
 
-extern "C" void LIBUSB_CALL device_added_usbthread(libusb_device *dev, void *user_data);
-extern "C" void LIBUSB_CALL device_removed_usbthread(libusb_device *dev, void *user_data);
+static libusb_hotplug_callback_handle hotplug_handle;
+
+void deviceAdded(libusb_device *dev);
+void deviceRemoved(libusb_device *dev);
+
+extern "C" int LIBUSB_CALL hotplug_callback(libusb_context *ctx, libusb_device *dev,
+	libusb_hotplug_event event, void *user_data)
+{
+	if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) {
+		libusb_ref_device(dev);
+		boost::asio::post(io, boost::bind(deviceAdded, dev));
+	} else if (event == LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT) {
+		boost::asio::post(io, boost::bind(deviceRemoved, dev));
+	}
+	return 0; // keep listening
+}
 
 void usb_init(){
 	int r = libusb_init(NULL);
@@ -35,8 +50,12 @@ void usb_init(){
 		cerr << "Could not init libusb" << endl;
 		abort();
 	}
-	
-	libusb_register_hotplug_listeners(NULL, device_added_usbthread, device_removed_usbthread, 0);
+
+	libusb_hotplug_register_callback(NULL,
+		(libusb_hotplug_event)(LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT),
+		LIBUSB_HOTPLUG_NO_FLAGS,
+		LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
+		hotplug_callback, NULL, &hotplug_handle);
 
 	usb_thread = new boost::thread(usb_thread_main);
 }
@@ -51,7 +70,7 @@ void usb_fini(){
 	usb_thread->join(); //currently blocks forever
 
 	devices.empty();
-	
+
 	libusb_exit(NULL);
 }
 
@@ -63,9 +82,9 @@ void deviceAdded(libusb_device *dev){
 		libusb_unref_device(dev);
 		return;
 	}
-	
+
 	device_ptr newDevice;
-	
+
 	try{
 		if (desc.idVendor == NONOLITH_VID || desc.idVendor == 0x9999){
 			if (desc.idProduct == CEE_PID){
@@ -77,13 +96,13 @@ void deviceAdded(libusb_device *dev){
 	}catch(std::exception e){
 		cerr << "Error initializing new device. Ignoring." << std::endl;
 	}
-	
+
 	if (newDevice){
 		devices.insert(newDevice);
 		active_libusb_devices.insert(pair<libusb_device *, device_ptr>(dev, newDevice));
 		device_list_changed.notify();
 	}
-	
+
 	libusb_unref_device(dev);
 }
 
@@ -98,18 +117,9 @@ void deviceRemoved(libusb_device *dev){
 	ds_dev->onDisconnect();
 }
 
-extern "C" void LIBUSB_CALL device_added_usbthread(libusb_device *dev, void *user_data){
-	libusb_ref_device(dev);
-	io.post(boost::bind(deviceAdded, dev));
-}
-
-extern "C" void LIBUSB_CALL device_removed_usbthread(libusb_device *dev, void *user_data){
-	io.post(boost::bind(deviceRemoved, dev));
-}
-
 void usb_scan_devices(){
 	libusb_device **devs;
-	
+
 	ssize_t cnt = libusb_get_device_list(NULL, &devs);
 	if (cnt < 0){
 		cerr << "Error in get_device_list" << endl;
@@ -130,23 +140,23 @@ bool USB_device::processMessage(ClientConn& client, string& cmd, JSONNode& n){
 		uint8_t bRequest = jsonIntProp(n, "bRequest");
 		uint16_t wValue = jsonIntProp(n, "wValue", 0);
 		uint16_t wIndex = jsonIntProp(n, "wIndex", 0);
-	
+
 		bool isIn = bmRequestType & 0x80;
-		
+
 		JSONNode reply(JSON_NODE);
 		reply.push_back(JSONNode("_action", "return"));
 		reply.push_back(JSONNode("id", id));
-		
+
 		int ret = -1000;
-		
+
 		if (isIn){
 			uint16_t wLength = jsonIntProp(n, "wLength", 64);
 			if (wLength > 64) wLength = 64;
 			if (wLength < 0) wLength = 0;
-		
+
 			uint8_t data[wLength];
 			ret = controlTransfer(bmRequestType, bRequest, wValue, wIndex, data, wLength);
-			
+
 			if (ret >= 0){
 				JSONNode data_arr(JSON_ARRAY);
 				for (int i=0; i<ret && i<wLength; i++){
@@ -167,9 +177,9 @@ bool USB_device::processMessage(ClientConn& client, string& cmd, JSONNode& n){
 			}
 			ret = controlTransfer(bmRequestType, bRequest, wValue, wIndex, (uint8_t *)datastr.data(), datastr.size());
 		}
-		
+
 		reply.push_back(JSONNode("status", ret));
-	
+
 		client.sendJSON(reply);
 	}else if(cmd == "enterBootloader"){
 		std::cout << "enterBootloader: ";
@@ -180,5 +190,3 @@ bool USB_device::processMessage(ClientConn& client, string& cmd, JSONNode& n){
 	}
 	return true;
 }
-
-
