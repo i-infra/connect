@@ -7,6 +7,7 @@
 //   Kevin Mehall <km@kevinmehall.net>
 
 #include <string>
+#include <iostream>
 #include <boost/foreach.hpp>
 
 #include "session.hpp"

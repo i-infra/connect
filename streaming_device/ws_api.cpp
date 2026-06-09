@@ -6,6 +6,7 @@
 // Authors:
 //   Kevin Mehall <km@kevinmehall.net>
 
+#include <iostream>
 #include "streaming_device.hpp"
 #include "stream_listener.hpp"
 
