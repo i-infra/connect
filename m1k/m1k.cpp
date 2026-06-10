@@ -81,7 +81,10 @@ M1K_device::M1K_device(libusb_device *dev, libusb_device_descriptor &desc):
 		_fwversion = string(buf, strnlen(buf, r));
 	}
 
-	minSampleTime = M1K_MIN_PER / M1K_TIMER_CLOCK;
+	// Firmware >= 2.0 uses interleaved data format; older uses block format
+	fw_interleaved = (atof(_fwversion.c_str()) >= 2.0);
+
+	minSampleTime = 2.0 * M1K_MIN_PER / M1K_TIMER_CLOCK;
 
 	cerr << "    Hardware: " << _hwversion << endl;
 	cerr << "    Firmware: " << _fwversion << endl;
@@ -137,10 +140,12 @@ void M1K_device::configure(int mode, double _sampleTime, unsigned samples, bool 
 	channel_b.streams.clear();
 
 	// Compute timer period (matches libsmu: sam_per = round(sample_time * clock) / 2)
+	// Each sample takes 2 timer ticks (A-phase + B-phase), so actual
+	// sample period = 2 * m1k_per / clock.
 	m1k_per = round(_sampleTime * M1K_TIMER_CLOCK) / 2;
 	if (m1k_per < M1K_MIN_PER) m1k_per = M1K_MIN_PER;
 	if (m1k_per > M1K_MAX_PER) m1k_per = M1K_MAX_PER;
-	sampleTime = m1k_per / M1K_TIMER_CLOCK;
+	sampleTime = 2.0 * m1k_per / M1K_TIMER_CLOCK;
 
 	captureSamples = samples;
 	captureContinuous = continuous;
@@ -324,27 +329,43 @@ void M1K_device::handleInTransfer(unsigned char* buffer) {
 		for (unsigned i = 0; i < M1K_CHUNK_SIZE; i++) {
 			float v;
 
+			uint16_t raw_av, raw_ai, raw_bv, raw_bi;
+
+			if (fw_interleaved) {
+				// Firmware >= 2.0: interleaved [AV, AI, BV, BI] per sample
+				raw_av = buf[i*8+0] << 8 | buf[i*8+1];
+				raw_ai = buf[i*8+2] << 8 | buf[i*8+3];
+				raw_bv = buf[i*8+4] << 8 | buf[i*8+5];
+				raw_bi = buf[i*8+6] << 8 | buf[i*8+7];
+			} else {
+				// Firmware < 2.0: block format [all AV][all AI][all BV][all BI]
+				raw_av = buf[(i+M1K_CHUNK_SIZE*0)*2] << 8 | buf[(i+M1K_CHUNK_SIZE*0)*2+1];
+				raw_ai = buf[(i+M1K_CHUNK_SIZE*1)*2] << 8 | buf[(i+M1K_CHUNK_SIZE*1)*2+1];
+				raw_bv = buf[(i+M1K_CHUNK_SIZE*2)*2] << 8 | buf[(i+M1K_CHUNK_SIZE*2)*2+1];
+				raw_bi = buf[(i+M1K_CHUNK_SIZE*3)*2] << 8 | buf[(i+M1K_CHUNK_SIZE*3)*2+1];
+			}
+
 			if (rawMode) {
-				put(channel_a_v, (buf[i*8+0] << 8 | buf[i*8+1]));
-				put(channel_a_i, (buf[i*8+2] << 8 | buf[i*8+3]));
-				put(channel_b_v, (buf[i*8+4] << 8 | buf[i*8+5]));
-				put(channel_b_i, (buf[i*8+6] << 8 | buf[i*8+7]));
+				put(channel_a_v, raw_av);
+				put(channel_a_i, raw_ai);
+				put(channel_b_v, raw_bv);
+				put(channel_b_i, raw_bi);
 			} else {
 				// Channel A voltage
-				v = (buf[i*8+0] << 8 | buf[i*8+1]) * M1K_V_RESOLUTION;
+				v = raw_av * M1K_V_RESOLUTION;
 				put(channel_a_v, (v - cal.offset[0]) * cal.gain_p[0]);
 
 				// Channel A current: scale to mA
-				v = (((buf[i*8+2] << 8 | buf[i*8+3]) * M1K_I_RESOLUTION) - 0.195) * 1.25;
+				v = ((raw_ai * M1K_I_RESOLUTION) - 0.195) * 1.25;
 				float ai = (v - cal.offset[1]) * (v > 0 ? cal.gain_p[1] : cal.gain_n[1]);
 				put(channel_a_i, ai * 1000.0); // A -> mA
 
 				// Channel B voltage
-				v = (buf[i*8+4] << 8 | buf[i*8+5]) * M1K_V_RESOLUTION;
+				v = raw_bv * M1K_V_RESOLUTION;
 				put(channel_b_v, (v - cal.offset[4]) * cal.gain_p[4]);
 
 				// Channel B current: scale to mA
-				v = (((buf[i*8+6] << 8 | buf[i*8+7]) * M1K_I_RESOLUTION) - 0.195) * 1.25;
+				v = ((raw_bi * M1K_I_RESOLUTION) - 0.195) * 1.25;
 				float bi = (v - cal.offset[5]) * (v > 0 ? cal.gain_p[5] : cal.gain_n[5]);
 				put(channel_b_i, bi * 1000.0); // A -> mA
 			}
@@ -402,11 +423,19 @@ void M1K_device::fillOutTransfer(unsigned char* buf) {
 				uint16_t a = encode_out(0, channel_a.source->getValue(capture_o, sampleTime));
 				uint16_t b = encode_out(1, channel_b.source->getValue(capture_o, sampleTime));
 
-				// 16-bit big-endian interleaved: [A_hi, A_lo, B_hi, B_lo]
-				pkt[i*4+0] = a >> 8;
-				pkt[i*4+1] = a & 0xff;
-				pkt[i*4+2] = b >> 8;
-				pkt[i*4+3] = b & 0xff;
+				if (fw_interleaved) {
+					// Firmware >= 2.0: interleaved [A_hi, A_lo, B_hi, B_lo]
+					pkt[i*4+0] = a >> 8;
+					pkt[i*4+1] = a & 0xff;
+					pkt[i*4+2] = b >> 8;
+					pkt[i*4+3] = b & 0xff;
+				} else {
+					// Firmware < 2.0: block [all A][all B]
+					pkt[(i+M1K_CHUNK_SIZE*0)*2]   = a >> 8;
+					pkt[(i+M1K_CHUNK_SIZE*0)*2+1] = a & 0xff;
+					pkt[(i+M1K_CHUNK_SIZE*1)*2]   = b >> 8;
+					pkt[(i+M1K_CHUNK_SIZE*1)*2+1] = b & 0xff;
+				}
 
 				capture_o++;
 			}

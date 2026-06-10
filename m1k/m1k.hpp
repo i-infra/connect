@@ -151,6 +151,7 @@ protected:
 	int m1k_per;
 	uint16_t sof_start;
 	uint8_t ledState;
+	bool fw_interleaved; // true for fw >= 2.0 (interleaved data format)
 	M1K_frontend frontend[2]; // [0]=A, [1]=B
 
 	// REST callbacks

@@ -1,6 +1,11 @@
 build/
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
 *.o
 *.a
+*.dblite
 nonolith-connect
 nonolith-connect.exe
 debian/changelog
