@@ -45,6 +45,12 @@ struct M1K_EEPROM_cal {
 #define M1K_I_MIN            -200.0   // mA
 #define M1K_I_MAX            200.0    // mA
 
+// Output->input pipeline delay: a value encoded for output sample N is
+// observed in the captured input at index N + this many samples (device
+// OUT FIFO + analog/ADC pipeline). Measured via out-triggered sine readback
+// at 100 ksps and 50 ksps; constant in samples across sample rates.
+#define M1K_OUTPUT_DELAY_SAMPLES 113
+
 // GPIO pin definitions (PIOB offset = 0x20)
 #define M1K_CHA_50R_2V5     (0x20 + 0)   // PB0
 #define M1K_CHA_50R_GND     (0x20 + 1)   // PB1
@@ -93,6 +99,7 @@ public:
 	virtual bool handleREST(UrlPath path, session_ptr client);
 
 	virtual void setOutput(Channel* channel, OutputSource* source);
+	virtual int outputDelaySamples() { return M1K_OUTPUT_DELAY_SAMPLES; }
 
 	libusb_transfer* in_transfers[M1K_N_TRANSFERS];
 	libusb_transfer* out_transfers[M1K_N_TRANSFERS];
