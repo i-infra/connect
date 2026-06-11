@@ -115,7 +115,9 @@ void M1K_device::readCalibration() {
 
 	if (cal.eeprom_valid != M1K_EEPROM_VALID) {
 		cerr << "    Calibration data invalid, using defaults" << endl;
-		cal.eeprom_valid = M1K_EEPROM_VALID;
+		// Leave eeprom_valid as-is so clients querying readCalibration can
+		// see that the device is running on defaults; writeCalibration sets
+		// the magic before writing.
 		for (int i = 0; i < 8; i++) {
 			cal.offset[i] = 0.0;
 			cal.gain_p[i] = 1.0;
