@@ -122,12 +122,6 @@ class StreamingDevice: public Device{
 
 		virtual void setOutput(Channel* channel, OutputSource* source);
 		virtual void setInternalGain(Channel* channel, Stream* stream, int gain){}
-
-		/// Output->input pipeline delay in samples: an output source value
-		/// generated for sample index N is observed in the captured input at
-		/// index N + outputDelaySamples(). Used to align output-phase triggers
-		/// with the measured waveform.
-		virtual int outputDelaySamples(){ return 0; }
 		
 		virtual void setGain(Channel* c, Stream* s, double gain){
 			setInternalGain(c, s, round(gain * s->normalGain));

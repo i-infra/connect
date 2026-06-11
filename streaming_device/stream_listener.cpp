@@ -244,11 +244,8 @@ bool StreamListener::findTrigger(){
 		}
 
 	}else if (triggerType == OUTSOURCE){
-		// Shift by the device's output pipeline delay so the trigger lands on
-		// the phase zero as observed in the captured input
-		double zero = triggerChannel->source->getPhaseZeroAfterSample(index)
-		            + device->outputDelaySamples();
-
+		double zero = triggerChannel->source->getPhaseZeroAfterSample(index);
+		
 		if (std::isfinite(zero) && device->capture_o >= round(zero)){
 			index = round(zero) + triggerOffset;
 			triggerSubsampleError = zero - round(zero);
