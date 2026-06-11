@@ -45,9 +45,9 @@ M1K_device::M1K_device(libusb_device *dev, libusb_device_descriptor &desc):
 	channel_b("b", "B"),
 	//          id   name         unit  min       max       omode uncert.     gain
 	channel_a_v("v", "Voltage A", "V",  M1K_V_MIN, M1K_V_MAX, 1, M1K_V_RESOLUTION, 1),
-	channel_a_i("i", "Current A", "mA", M1K_I_MIN, M1K_I_MAX, 2, 1, 1),
+	channel_a_i("i", "Current A", "mA", M1K_I_MIN, M1K_I_MAX, 2, M1K_I_RESOLUTION*1000.0, 1),
 	channel_b_v("v", "Voltage B", "V",  M1K_V_MIN, M1K_V_MAX, 1, M1K_V_RESOLUTION, 1),
-	channel_b_i("i", "Current B", "mA", M1K_I_MIN, M1K_I_MAX, 2, 1, 1)
+	channel_b_i("i", "Current B", "mA", M1K_I_MIN, M1K_I_MAX, 2, M1K_I_RESOLUTION*1000.0, 1)
 {
 	cerr << "Found an M1K: \n    Serial: " << serial << endl;
 
@@ -149,6 +149,12 @@ void M1K_device::configure(int mode, double _sampleTime, unsigned samples, bool 
 
 	captureSamples = samples;
 	captureContinuous = continuous;
+	if (mode != 0) {
+		// M1K only implements mode 0; anything else would leave channels
+		// and sample buffers unconfigured and crash the capture path
+		cerr << "M1K: unsupported mode " << mode << " requested, using 0" << endl;
+		mode = 0;
+	}
 	devMode = mode;
 	rawMode = raw;
 	captureLength = captureSamples * sampleTime;
@@ -199,6 +205,27 @@ void M1K_device::configure(int mode, double _sampleTime, unsigned samples, bool 
 	notifyConfig();
 }
 
+// --- State JSON (includes frontend) ---
+
+JSONNode M1K_device::stateToJSON(bool configOnly) {
+	JSONNode n = StreamingDevice::stateToJSON(configOnly);
+
+	// Append M1K-specific frontend state
+	JSONNode fe = frontendToJSON();
+	fe.set_name("frontend");
+	n.push_back(fe);
+
+	// Include current mode names for clarity
+	JSONNode modes(JSON_NODE);
+	modes.set_name("m1k_modes");
+	const char* mode_names[] = {"hi_z", "svmi", "simv", "hi_z_split", "svmi_split", "simv_split"};
+	modes.push_back(JSONNode("a", mode_names[m_mode[0]]));
+	modes.push_back(JSONNode("b", mode_names[m_mode[1]]));
+	n.push_back(modes);
+
+	return n;
+}
+
 // --- Mode control ---
 
 void M1K_device::set_mode(unsigned channel, unsigned mode) {
@@ -228,6 +255,16 @@ void M1K_device::set_mode(unsigned channel, unsigned mode) {
 	}
 
 	m_mode[channel] = mode;
+
+	// Update frontend cache to match what firmware set_mode() does to the GPIO pins
+	// Firmware set_mode: DISABLED => feedback on (PBx clear), output_en off (PBx set)
+	//                    SVMI/SIMV => feedback on (PBx clear), output_en on (PBx clear)
+	unsigned base_mode = mode % 3; // 0=HI_Z, 1=SVMI, 2=SIMV
+	frontend[channel].feedback = true; // firmware always clears feedback pin (active LOW = on)
+	frontend[channel].output_en = (base_mode != 0); // on for SVMI/SIMV, off for HI_Z/DISABLED
+	frontend[channel].split = split;
+	frontend[channel].pot_r1 = (pset >> 8) & 0xFF;
+	frontend[channel].pot_r2 = pset & 0xFF;
 }
 
 // --- Capture control ---
@@ -276,7 +313,7 @@ void M1K_device::on_start_capture() {
 		const int isize = M1K_IN_PACKET_SIZE * packets_per_transfer;
 		unsigned char* ibuf = (unsigned char*)malloc(isize);
 		libusb_fill_bulk_transfer(in_transfers[i], handle, EP_BULK_IN,
-			ibuf, isize, m1k_in_transfer_callback, this, 500);
+			ibuf, isize, m1k_in_transfer_callback, this, 10000);
 		in_transfers[i]->flags |= LIBUSB_TRANSFER_FREE_BUFFER;
 		libusb_submit_transfer(in_transfers[i]);
 
@@ -287,7 +324,7 @@ void M1K_device::on_start_capture() {
 		fillOutTransfer(obuf);
 		outcount++;
 		libusb_fill_bulk_transfer(out_transfers[i], handle, EP_BULK_OUT,
-			obuf, osize, m1k_out_transfer_callback, this, 500);
+			obuf, osize, m1k_out_transfer_callback, this, 10000);
 		out_transfers[i]->flags |= LIBUSB_TRANSFER_FREE_BUFFER;
 		libusb_submit_transfer(out_transfers[i]);
 	}
@@ -478,6 +515,9 @@ void M1K_device::setOutput(Channel* channel, OutputSource* source) {
 }
 
 inline void M1K_device::checkOutputEffective(Channel& channel) {
+	// source is null if configured with an unsupported mode (only mode 0
+	// sets up channels for the M1K)
+	if (!channel.source) return;
 	if (!channel.source->effective && capture_i > channel.source->startSample) {
 		channel.source->effective = true;
 		notifyOutputChanged(&channel, channel.source);

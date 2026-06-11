@@ -264,6 +264,7 @@ the same `id` from this client.
 | `start` | int | Start sample index; negative = relative to latest (default -1) |
 | `count` | int | Number of output rows (0 = unlimited) |
 | `streams` | array | Array of `{"channel": "a", "stream": "v"}` stream references |
+| `binary` | bool | Send updates as binary WebSocket frames instead of JSON (default false) |
 | `trigger` | object | Optional trigger configuration (see below) |
 
 **Trigger object:**
@@ -313,6 +314,25 @@ Streaming data response for an active listener.
 ```
 
 [streaming_device/stream_listener.cpp:113-171](https://github.com/nonolith/connect/blob/29c3c994e297/streaming_device/stream_listener.cpp#L113-L171)
+
+**Binary updates:** if the `listen` command set `"binary": true`, updates for
+that listener arrive as binary WebSocket frames instead of the JSON message
+above. Frame layout (all little-endian):
+
+| Offset | Type | Field |
+|--------|------|-------|
+| 0 | u8 | frame type, always `1` (stream update) |
+| 1 | u8 | flags: bit0 `done`, bit1 `triggerForced`, bit2 `subsample` valid |
+| 2 | u16 | number of streams |
+| 4 | u32 | listener `id` |
+| 8 | u32 | `idx` |
+| 12 | u32 | `sampleIndex` (valid when `idx` == 0) |
+| 16 | f32 | `subsample` (valid when flags bit2 set) |
+| 20 | u32 | `nchunks` — samples per stream |
+| 24 | f32[] | sample data, one contiguous `nchunks`-long block per stream |
+
+This avoids JSON encode/parse overhead for high-rate raw-sample listeners,
+and transports NaN (gap/overrun markers) losslessly.
 
 ### `cancelListen`
 

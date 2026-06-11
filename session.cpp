@@ -192,7 +192,15 @@ bool WsSession::is_closed() const {
 
 void WsSession::send(const std::string& msg) {
 	if (closed_ || !ws_.is_open()) return;
-	write_queue_.push(msg);
+	write_queue_.push(std::make_pair(msg, false));
+	if (!writing_) {
+		do_write();
+	}
+}
+
+void WsSession::send_binary(const std::string& msg) {
+	if (closed_ || !ws_.is_open()) return;
+	write_queue_.push(std::make_pair(msg, true));
 	if (!writing_) {
 		do_write();
 	}
@@ -205,8 +213,8 @@ void WsSession::do_write() {
 	}
 	writing_ = true;
 	auto self = shared_from_this();
-	ws_.text(true);
-	ws_.async_write(net::buffer(write_queue_.front()),
+	ws_.binary(write_queue_.front().second);
+	ws_.async_write(net::buffer(write_queue_.front().first),
 		[self](boost::system::error_code ec, std::size_t) {
 			if (ec) {
 				self->closed_ = true;

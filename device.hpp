@@ -70,5 +70,9 @@ class ClientConn{
 	}
 	
 	virtual void sendJSON(JSONNode &n) = 0;
+
+	// Send a raw binary frame. Only meaningful for WebSocket connections;
+	// the default discards the data.
+	virtual void sendBinary(const std::string& data){}
 };
 

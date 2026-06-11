@@ -43,6 +43,7 @@ public:
 
 	// WebSocket only
 	virtual void send(const std::string& msg) = 0;
+	virtual void send_binary(const std::string& msg) { send(msg); }
 
 	// Called on WS upgrade — not used by most code
 	virtual void start_websocket() {}
@@ -100,6 +101,7 @@ public:
 
 	bool is_closed() const override;
 	void send(const std::string& msg) override;
+	void send_binary(const std::string& msg) override;
 
 	/// Start async read loop on the io_context.
 	/// Calls on_message for each received message, on_close when done.
@@ -117,7 +119,7 @@ private:
 	std::map<std::string, std::string> headers_;
 	std::function<void(std::shared_ptr<WsSession>, std::string)> on_message_;
 	std::function<void(std::shared_ptr<WsSession>)> on_close_;
-	std::queue<std::string> write_queue_;
+	std::queue<std::pair<std::string, bool>> write_queue_; // (payload, is_binary)
 	bool writing_;
 	bool closed_;
 };

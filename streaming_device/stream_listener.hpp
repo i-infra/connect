@@ -30,6 +30,9 @@ struct StreamListener{
 	unsigned decimateFactor;
 	unsigned index;
 
+	// send updates as binary frames instead of JSON (requested by client)
+	bool binary;
+
 	unsigned outIndex;
 	int count;
 	

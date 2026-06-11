@@ -10,10 +10,13 @@
 #include <boost/foreach.hpp>
 #include <iostream>
 #include <memory>
+#include <cstring>
+#include <cstdint>
 
 StreamListener::StreamListener():
 	id(0),
 	index(0),
+	binary(false),
 	outIndex(0),
 	triggerType(NONE),
 	triggered(false),
@@ -34,9 +37,10 @@ listener_ptr makeStreamListener(StreamingDevice* dev, ClientConn* client, JSONNo
 	listener->client = client;
 	
 	listener->decimateFactor = jsonIntProp(n, "decimateFactor", 1);
-	
+	listener->binary = jsonBoolProp(n, "binary", false);
+
 	// Prevent divide by 0
-	if (listener->decimateFactor == 0) listener->decimateFactor = 1; 
+	if (listener->decimateFactor == 0) listener->decimateFactor = 1;
 
 	int start = jsonIntProp(n, "start", -1);
 	if (start < 0){ // Negative indexes are relative to latest sample
@@ -110,54 +114,103 @@ unsigned StreamListener::howManySamples(){
 	return nchunks;
 }
 
+// Binary update frame (all values little-endian):
+//   u8   type = 1 (stream update)
+//   u8   flags: bit0 done, bit1 triggerForced, bit2 subsample valid
+//   u16  stream count
+//   u32  listener id
+//   u32  idx (output sample index of first sample in this frame)
+//   u32  sampleIndex (device sample index, valid when idx == 0)
+//   f32  subsample (trigger subsample error, valid when flags bit2 set)
+//   u32  nchunks (samples per stream)
+//   f32  data[stream count][nchunks]
+#define BINARY_UPDATE_HEADER_SIZE 24
+
 bool WSStreamListener::handleNewData(){
 	unsigned nchunks = howManySamples();
 	if (!nchunks) return true;
-	
-	JSONNode n(JSON_NODE);
 
-	n.push_back(JSONNode("id", id));
-	n.push_back(JSONNode("idx", outIndex));
-	
-	if (outIndex == 0){
-		if (triggerForce && index > triggerForceIndex){
-			n.push_back(JSONNode("triggerForced", true));
-		}
-		if (triggered){
-			n.push_back(JSONNode("subsample", triggerSubsampleError));
-		}
-		n.push_back(JSONNode("sampleIndex", index));
-	}
-	
-	JSONNode streams_data(JSON_ARRAY);
-	streams_data.set_name("data");
-	
-	BOOST_FOREACH(Stream* stream, streams){
-		JSONNode a(JSON_ARRAY);
-		
-		for (unsigned chunk = 0; chunk < nchunks; chunk++){
-			a.push_back(JSONNode("", 
-				device->resample(*stream, index+chunk*decimateFactor, decimateFactor)
-			));
-		}
-		
-		streams_data.push_back(a);
-	}
-	
-	n.push_back(streams_data);
-	
-	index += nchunks * decimateFactor;
-	outIndex += nchunks;
+	bool willBeDone = (count>0 && (int)(outIndex + nchunks) >= count);
 
-	bool done = (count>0 && (int) outIndex >= count);
-	
-	if (done && !triggerRepeat){
-		n.push_back(JSONNode("done", true));
+	if (binary){
+		size_t nstreams = streams.size();
+		std::string buf(BINARY_UPDATE_HEADER_SIZE + nstreams*nchunks*4, '\0');
+		uint8_t* p = (uint8_t*) &buf[0];
+
+		uint8_t flags = 0;
+		if (willBeDone && !triggerRepeat) flags |= 1;
+		if (outIndex == 0 && triggerForce && index > triggerForceIndex) flags |= 2;
+		if (outIndex == 0 && triggered) flags |= 4;
+
+		p[0] = 1;
+		p[1] = flags;
+		uint16_t ns = (uint16_t) nstreams;          memcpy(p+2,  &ns, 2);
+		uint32_t u;
+		u = id;                                     memcpy(p+4,  &u, 4);
+		u = outIndex;                               memcpy(p+8,  &u, 4);
+		u = index;                                  memcpy(p+12, &u, 4);
+		float sub = (float) triggerSubsampleError;  memcpy(p+16, &sub, 4);
+		u = nchunks;                                memcpy(p+20, &u, 4);
+
+		size_t off = BINARY_UPDATE_HEADER_SIZE;
+		BOOST_FOREACH(Stream* stream, streams){
+			for (unsigned chunk = 0; chunk < nchunks; chunk++){
+				float s = device->resample(*stream, index+chunk*decimateFactor, decimateFactor);
+				memcpy(p+off, &s, 4);
+				off += 4;
+			}
+		}
+
+		index += nchunks * decimateFactor;
+		outIndex += nchunks;
+
+		client->sendBinary(buf);
+	}else{
+		JSONNode n(JSON_NODE);
+
+		n.push_back(JSONNode("id", id));
+		n.push_back(JSONNode("idx", outIndex));
+
+		if (outIndex == 0){
+			if (triggerForce && index > triggerForceIndex){
+				n.push_back(JSONNode("triggerForced", true));
+			}
+			if (triggered){
+				n.push_back(JSONNode("subsample", triggerSubsampleError));
+			}
+			n.push_back(JSONNode("sampleIndex", index));
+		}
+
+		JSONNode streams_data(JSON_ARRAY);
+		streams_data.set_name("data");
+
+		BOOST_FOREACH(Stream* stream, streams){
+			JSONNode a(JSON_ARRAY);
+
+			for (unsigned chunk = 0; chunk < nchunks; chunk++){
+				a.push_back(JSONNode("",
+					device->resample(*stream, index+chunk*decimateFactor, decimateFactor)
+				));
+			}
+
+			streams_data.push_back(a);
+		}
+
+		n.push_back(streams_data);
+
+		index += nchunks * decimateFactor;
+		outIndex += nchunks;
+
+		if (willBeDone && !triggerRepeat){
+			n.push_back(JSONNode("done", true));
+		}
+
+		n.push_back(JSONNode("_action", "update"));
+		client->sendJSON(n);
 	}
 
-	n.push_back(JSONNode("_action", "update"));
-	client->sendJSON(n);
-	
+	bool done = willBeDone;
+
 	if (done && triggerRepeat){
 		//std::cout << "Trigger sweep end "<<index<<" "<<outIndex<<std::endl;
 		outIndex = 0;

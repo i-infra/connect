@@ -41,6 +41,13 @@ struct WebsocketClientConn: public ClientConn{
 		client->send(jc);
 	}
 
+	void sendBinary(const std::string& data){
+		if (debugFlag){
+			std::cout << "TXD: <binary frame, " << data.size() << " bytes>" << std::endl;
+		}
+		client->send_binary(data);
+	}
+
 	void on_device_list_changed(){
 		JSONNode n(JSON_NODE);
 		JSONNode devices = jsonDevicesArray();
