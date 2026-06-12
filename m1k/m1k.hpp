@@ -10,6 +10,7 @@
 #include "../streaming_device/streaming_device.hpp"
 #include "../usb_device.hpp"
 #include <boost/thread/mutex.hpp>
+#include <climits>
 
 // EEPROM calibration format (matches libsmu device_m1000.hpp)
 #define M1K_EEPROM_VALID 0x01ee02dd
@@ -35,7 +36,7 @@ struct M1K_EEPROM_cal {
 #define M1K_MIN_PER          240     // 100 ksps
 #define M1K_MAX_PER          24000   // ~1 ksps
 
-#define M1K_N_TRANSFERS      4
+#define M1K_N_TRANSFERS      2
 
 // Voltage/current ADC conversion constants (from libsmu)
 #define M1K_V_RESOLUTION     (5.0 / 65536.0)
@@ -89,6 +90,7 @@ public:
 	virtual const string fwVersion() { return _fwversion; }
 	virtual const string serialno() { return serial; }
 
+	virtual JSONNode stateToJSON(bool configOnly=false);
 	virtual bool processMessage(ClientConn& session, string& cmd, JSONNode& n);
 	virtual bool handleREST(UrlPath path, session_ptr client);
 
@@ -113,6 +115,12 @@ public:
 
 	unsigned incount, outcount;
 	int packets_per_transfer;
+
+	// Output/input lead tracking for stream resync (see handleInTransfer)
+	long long lead_baseline = LLONG_MIN;
+	long long lead_min = LLONG_MAX;
+	unsigned lead_count = 0;
+	unsigned lead_settle = 16;
 
 protected:
 	string _hwversion, _fwversion;

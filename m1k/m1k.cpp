@@ -276,6 +276,10 @@ void M1K_device::on_reset_capture() {
 	incount = outcount = 0;
 	if (channel_a.source) channel_a.source->startSample = 0;
 	if (channel_b.source) channel_b.source->startSample = 0;
+	lead_baseline = LLONG_MIN;
+	lead_min = LLONG_MAX;
+	lead_count = 0;
+	lead_settle = 16;
 }
 
 void M1K_device::on_start_capture() {
@@ -417,6 +421,39 @@ void M1K_device::handleInTransfer(unsigned char* buffer) {
 	packetDone();
 	checkOutputEffective(channel_a);
 	checkOutputEffective(channel_b);
+
+	// --- Output/input stream resync ---
+	// capture_o (encode position) and capture_i (capture position) advance
+	// in lockstep with a fixed queue lead. Host scheduling stalls can let
+	// the device replay stale ring data while encoding pauses (or vice
+	// versa), permanently shifting that lead — and with it the phase
+	// relationship out-source triggers depend on (seen as waveform drag
+	// handles drifting off the trace after hours of capture). Track the
+	// per-window minimum lead and re-anchor capture_o when it drifts; the
+	// correction causes a one-time output glitch of |drift| samples but
+	// restores index-space alignment.
+	{
+		boost::mutex::scoped_lock lock(outputMutex);
+		long long lead = (long long)capture_o - (long long)capture_i;
+		if (lead_settle) {
+			lead_settle--;
+		} else {
+			if (lead < lead_min) lead_min = lead;
+			if (++lead_count >= 64) {
+				if (lead_baseline == LLONG_MIN) {
+					lead_baseline = lead_min;
+				} else {
+					long long drift = lead_min - lead_baseline;
+					if (drift > M1K_CHUNK_SIZE/2 || drift < -(long long)(M1K_CHUNK_SIZE/2)) {
+						capture_o -= drift;
+						cerr << "M1K: output stream resynced by " << -drift << " samples" << endl;
+					}
+				}
+				lead_min = LLONG_MAX;
+				lead_count = 0;
+			}
+		}
+	}
 }
 
 // --- OUT transfer encoding ---

@@ -19,8 +19,16 @@ class USB_device{
                             uint8_t* data,
                             uint16_t wLength,
                             unsigned timeout=25){
-		return libusb_control_transfer(handle,
-		           bmRequestType, bRequest, wValue, wIndex, data, wLength, timeout);                      
+		int r = libusb_control_transfer(handle,
+		           bmRequestType, bRequest, wValue, wIndex, data, wLength, timeout);
+		std::cerr << "vendor req"
+		          << " type=0x" << std::hex << (int)bmRequestType
+		          << " req=0x" << (int)bRequest
+		          << " val=0x" << (int)wValue
+		          << " idx=0x" << (int)wIndex
+		          << " len=" << std::dec << (int)wLength
+		          << " ret=" << r << std::endl;
+		return r;
 	}
 	
 
