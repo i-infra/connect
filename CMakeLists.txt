@@ -77,6 +77,48 @@ target_link_directories(nonolith-connect PRIVATE
     ${LIBUSB_LIBRARY_DIRS}
 )
 
+# Tests: link the protocol/handler stack (no sockets, no USB) against the
+# doctest suite in tests/. server.cpp, session.cpp, usb.cpp and the hardware
+# device classes are excluded; tests/main.cpp provides the shared globals.
+enable_testing()
+
+set(TEST_CORE_SOURCES
+    device.cpp
+    event.cpp
+    rest_service.cpp
+    url.cpp
+    version.cpp
+    websocket_service.cpp
+    streaming_device/output_source.cpp
+    streaming_device/rest_api.cpp
+    streaming_device/stream_listener.cpp
+    streaming_device/streaming_device.cpp
+    streaming_device/ws_api.cpp
+)
+
+file(GLOB TEST_SOURCES tests/main.cpp tests/test_*.cpp)
+
+add_executable(connect-tests ${TEST_CORE_SOURCES} ${TEST_SOURCES})
+
+target_include_directories(connect-tests PRIVATE ${CMAKE_SOURCE_DIR})
+
+target_link_libraries(connect-tests PRIVATE
+    json
+    Boost::regex
+    Boost::thread
+)
+
+add_test(NAME unit COMMAND connect-tests)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+    add_test(NAME e2e
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/e2e.py
+                $<TARGET_FILE:nonolith-connect>
+    )
+    set_tests_properties(e2e PROPERTIES TIMEOUT 60)
+endif()
+
 # Platform-specific
 if(APPLE)
     target_link_libraries(nonolith-connect PRIVATE

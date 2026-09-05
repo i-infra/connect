@@ -40,6 +40,25 @@ Build instructions
 
 The `nonolith-connect` executable will be in `build/`.
 
+Tests
+-----
+
+Two suites run under CTest:
+
+  * `unit` — `build/connect-tests`, a [doctest](https://github.com/doctest/doctest)
+    suite in `tests/` covering URL/JSON parsing, waveform sources, the sample
+    ring buffer, stream listeners (decimation, triggers, binary frames), and
+    the REST + WebSocket handler stack. The handlers are exercised in-process
+    against a synthetic streaming device, so no USB hardware is needed.
+  * `e2e` — `tests/e2e.py` launches the real binary on an ephemeral port and
+    tests HTTP routing, origin checks, and the WebSocket handshake/protocol
+    over real sockets (stdlib-only Python, no devices required).
+
+`tests/doctest.h` is a vendored third-party single header
+([doctest](https://github.com/doctest/doctest), MIT license).
+
+    cd build && ctest --output-on-failure
+
 Installation notes
 ------------------
 
@@ -78,6 +97,7 @@ The following flags can be passed to `nonolith-connect`
 **debug** - dump JSON communications to the console  
 **allow-remote** - listen on remote interfaces, rather than just localhost  
 **allow-any-origin** - disable origin checking, allowing scripts from any web page origin domain to connect  
+**port=N** - listen on port N instead of the default 9003 (used by the e2e tests)  
  
 API Documentation
 -----------------
