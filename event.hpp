@@ -20,7 +20,7 @@ class Event;
 class EventListener{
 	public:
 		EventListener(): event(0){}
-		EventListener(Event& e, void_function h){subscribe(e, h);}
+		EventListener(Event& e, void_function h): event(0){subscribe(e, h);}
 		~EventListener(){unsubscribe();}
 
 		void subscribe(Event& e, void_function h);
