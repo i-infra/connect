@@ -16,7 +16,7 @@
 #include "url.hpp"
 
 using boost::asio::ip::tcp;
-const unsigned short port = 9003;
+static unsigned short port = 9003;
 
 std::set<device_ptr> devices;
 boost::asio::io_context io;
@@ -108,6 +108,7 @@ int main(int argc, char* argv[]) {
 			if (arg == "debug") debugFlag = true;
 			if (arg == "allow-remote") allowRemote = true;
 			if (arg == "allow-any-origin") allowAnyOrigin = true;
+			if (arg.rfind("port=", 0) == 0) port = atoi(arg.c_str() + 5);
 		}
 
 		boost::asio::ip::address_v4 bind_addr;
