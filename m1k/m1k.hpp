@@ -132,6 +132,7 @@ protected:
 	uint16_t encode_out(unsigned channel, float val);
 	void checkOutputEffective(Channel& channel);
 	void set_mode(unsigned channel, unsigned mode);
+	void write_mode(unsigned channel, unsigned mode);
 
 	void readCalibration();
 

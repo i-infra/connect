@@ -138,6 +138,11 @@ void M1K_device::configure(int mode, double _sampleTime, unsigned samples, bool 
 	delete channel_b.source;
 	channel_b.source = nullptr;
 	channels.clear();
+
+	// Sources are reset to constant 0 in HI_Z below; reset the requested
+	// modes to match
+	m_mode[0] = M1K_HI_Z;
+	m_mode[1] = M1K_HI_Z;
 	channel_a.streams.clear();
 	channel_b.streams.clear();
 
@@ -231,6 +236,13 @@ JSONNode M1K_device::stateToJSON(bool configOnly) {
 // --- Mode control ---
 
 void M1K_device::set_mode(unsigned channel, unsigned mode) {
+	write_mode(channel, mode);
+	m_mode[channel] = mode;
+}
+
+// Program a channel's mode into the hardware without changing the requested
+// mode in m_mode, which on_start_capture re-applies.
+void M1K_device::write_mode(unsigned channel, unsigned mode) {
 	unsigned pset;
 	bool split = false;
 
@@ -255,8 +267,6 @@ void M1K_device::set_mode(unsigned channel, unsigned mode) {
 		unsigned pin = (channel == 0) ? 34 : 39;
 		controlTransfer(0x40, 0x51, pin, 0, 0, 0);
 	}
-
-	m_mode[channel] = mode;
 
 	// Update frontend cache to match what firmware set_mode() does to the GPIO pins
 	// Firmware set_mode: DISABLED => feedback on (PBx clear), output_en off (PBx set)
@@ -342,9 +352,9 @@ void M1K_device::on_pause_capture() {
 	// Stop sampling
 	controlTransfer(0x40, 0xC5, 0, 0, 0, 0);
 
-	// Reset modes to HI_Z
-	set_mode(0, M1K_HI_Z);
-	set_mode(1, M1K_HI_Z);
+	// Put the hardware in HI_Z, keeping the requested modes for the next start
+	write_mode(0, M1K_HI_Z);
+	write_mode(1, M1K_HI_Z);
 
 	for (int i = 0; i < M1K_N_TRANSFERS; i++) {
 		if (in_transfers[i]) {
